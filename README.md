@@ -1,7 +1,53 @@
-<img src="https://raw.githubusercontent.com/facebookresearch/pytorch3d/main/.github/pytorch3dlogo.png" width="900"/>
+# Pytorch3D-Me
 
-[![CircleCI](https://circleci.com/gh/facebookresearch/pytorch3d.svg?style=svg)](https://circleci.com/gh/facebookresearch/pytorch3d)
-[![Anaconda-Server Badge](https://anaconda.org/pytorch3d/pytorch3d/badges/version.svg)](https://anaconda.org/pytorch3d/pytorch3d)
+A [Pytorch3D](https://github.com/facebookresearch/pytorch3d) 0.6.1 extension with features introduced in [FitMe](https://github.com/lattas/FitMe) (CVPR 2023) and [AvatarMe++](https://github.com/lattas/avatarme) (TPAMI 2021),
+which introduces additional functionality in texturing and shading. In detail we add:
+- A renderer object for rendering directly in UV-space,
+- A blinn-phong based shader,
+- The option to use multiple reflectance textures with a single mesh, including Diffuse Albedo, Specular Albedo, Diffuse Normals, Specular Normals and Occlusion Shadow,
+- Spatially-varying specular shininess,
+- Subsurface-scattering approximation with spatially-varying translucency,
+- Multiple Point and Directional lights per rendered batch item.
+ 
+If you find this extension useful in your research consider citing the works below:
+```bibtex
+@inproceedings{lattas2023fitme,
+  title={FitMe: Deep Photorealistic 3D Morphable Model Avatars},
+  author={Lattas, Alexandros and Moschoglou, Stylianos and Ploumpis, Stylianos
+          and Gecer, Baris and Deng, Jiankang and Zafeiriou, Stefanos},
+  booktitle={Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition},
+  pages={8629--8640},
+  year={2023}
+}
+
+@article{lattas2021avatarme++,
+  title={Avatarme++: Facial shape and brdf inference with photorealistic rendering-aware gans},
+  author={Lattas, Alexandros and Moschoglou, Stylianos and Ploumpis, Stylianos
+          and Gecer, Baris and Ghosh, Abhijeet and Zafeiriou, Stefanos},
+  journal={IEEE Transactions on Pattern Analysis and Machine Intelligence},
+  volume={44},
+  number={12},
+  pages={9269--9284},
+  year={2021},
+  publisher={IEEE}
+}
+```
+as well as the main Pytorch3D project:
+```bibtex
+@article{ravi2020pytorch3d,
+    author = {Nikhila Ravi and Jeremy Reizenstein and David Novotny and Taylor Gordon
+                  and Wan-Yen Lo and Justin Johnson and Georgia Gkioxari},
+    title = {Accelerating 3D Deep Learning with PyTorch3D},
+    journal = {arXiv:2007.08501},
+    year = {2020},
+}
+```
+
+
+Below is the official README
+
+---
+
 
 # Introduction
 
