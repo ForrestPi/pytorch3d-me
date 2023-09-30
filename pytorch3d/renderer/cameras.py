@@ -1,4 +1,4 @@
-# Copyright (c) Facebook, Inc. and its affiliates.
+# Copyright (c) Meta Platforms, Inc. and affiliates.
 # All rights reserved.
 #
 # This source code is licensed under the BSD-style license found in the
@@ -75,6 +75,15 @@ class CamerasBase(TensorProperties):
     boolean argument of the function.
     """
 
+    # Used in __getitem__ to index the relevant fields
+    # When creating a new camera, this should be set in the __init__
+    _FIELDS: Tuple[str, ...] = ()
+
+    # Names of fields which are a constant property of the whole batch, rather
+    # than themselves a batch of data.
+    # When joining objects into a batch, they will have to agree.
+    _SHARED_FIELDS: Tuple[str, ...] = ()
+
     def get_projection_transform(self):
         """
         Calculate the projective transformation matrix.
@@ -89,7 +98,7 @@ class CamerasBase(TensorProperties):
         """
         raise NotImplementedError()
 
-    def unproject_points(self):
+    def unproject_points(self, xy_depth: torch.Tensor, **kwargs):
         """
         Transform input points from camera coodinates (NDC or screen)
         to the world / camera coordinates.
@@ -250,7 +259,7 @@ class CamerasBase(TensorProperties):
         Returns the transform from camera projection space (screen or NDC) to NDC space.
         For cameras that can be specified in screen space, this transform
         allows points to be converted from screen to NDC space.
-        The default transform scales the points from [0, W-1]x[0, H-1]
+        The default transform scales the points from [0, W]x[0, H]
         to [-1, 1]x[-u, u] or [-u, u]x[-1, 1] where u > 1 is the aspect ratio of the image.
         This function should be modified per camera definitions if need be,
         e.g. for Perspective/Orthographic cameras we provide a custom implementation.
@@ -362,6 +371,55 @@ class CamerasBase(TensorProperties):
         """
         return self.image_size if hasattr(self, "image_size") else None
 
+    def __getitem__(
+        self, index: Union[int, List[int], torch.LongTensor]
+    ) -> "CamerasBase":
+        """
+        Override for the __getitem__ method in TensorProperties which needs to be
+        refactored.
+
+        Args:
+            index: an int/list/long tensor used to index all the fields in the cameras given by
+                self._FIELDS.
+        Returns:
+            if `index` is an index int/list/long tensor return an instance of the current
+            cameras class with only the values at the selected index.
+        """
+
+        kwargs = {}
+
+        if not isinstance(index, (int, list, torch.LongTensor, torch.cuda.LongTensor)):
+            msg = "Invalid index type, expected int, List[int] or torch.LongTensor; got %r"
+            raise ValueError(msg % type(index))
+
+        if isinstance(index, int):
+            index = [index]
+
+        if max(index) >= len(self):
+            raise ValueError(f"Index {max(index)} is out of bounds for select cameras")
+
+        for field in self._FIELDS:
+            val = getattr(self, field, None)
+            if val is None:
+                continue
+
+            # e.g. "in_ndc" is set as attribute "_in_ndc" on the class
+            # but provided as "in_ndc" on initialization
+            if field.startswith("_"):
+                field = field[1:]
+
+            if isinstance(val, (str, bool)):
+                kwargs[field] = val
+            elif isinstance(val, torch.Tensor):
+                # In the init, all inputs will be converted to
+                # tensors before setting as attributes
+                kwargs[field] = val[index]
+            else:
+                raise ValueError(f"Field {field} type is not supported for indexing")
+
+        kwargs["device"] = self.device
+        return self.__class__(**kwargs)
+
 
 ############################################################
 #             Field of View Camera Classes                 #
@@ -433,6 +491,20 @@ class FoVPerspectiveCameras(CamerasBase):
     (i.e. square pixels) and only vary the output image dimensions in pixels
     for rasterization.
     """
+
+    # For __getitem__
+    _FIELDS = (
+        "K",
+        "znear",
+        "zfar",
+        "aspect_ratio",
+        "fov",
+        "R",
+        "T",
+        "degrees",
+    )
+
+    _SHARED_FIELDS = ("degrees",)
 
     def __init__(
         self,
@@ -590,7 +662,7 @@ class FoVPerspectiveCameras(CamerasBase):
         xy_depth: torch.Tensor,
         world_coordinates: bool = True,
         scaled_depth_input: bool = False,
-        **kwargs
+        **kwargs,
     ) -> torch.Tensor:
         """>!
         FoV cameras further allow for passing depth in world units
@@ -680,6 +752,20 @@ class FoVOrthographicCameras(CamerasBase):
     projection matrices by specifying the field of view.
     The definition of the parameters follow the OpenGL orthographic camera.
     """
+
+    # For __getitem__
+    _FIELDS = (
+        "K",
+        "znear",
+        "zfar",
+        "R",
+        "T",
+        "max_y",
+        "min_y",
+        "max_x",
+        "min_x",
+        "scale_xyz",
+    )
 
     def __init__(
         self,
@@ -819,7 +905,7 @@ class FoVOrthographicCameras(CamerasBase):
         xy_depth: torch.Tensor,
         world_coordinates: bool = True,
         scaled_depth_input: bool = False,
-        **kwargs
+        **kwargs,
     ) -> torch.Tensor:
         """>!
         FoV cameras further allow for passing depth in world units
@@ -907,6 +993,19 @@ class PerspectiveCameras(CamerasBase):
     If parameters are specified in screen space, `in_ndc` must be set to False.
     """
 
+    # For __getitem__
+    _FIELDS = (
+        "K",
+        "R",
+        "T",
+        "focal_length",
+        "principal_point",
+        "_in_ndc",  # arg is in_ndc but attribute set as _in_ndc
+        "image_size",
+    )
+
+    _SHARED_FIELDS = ("_in_ndc",)
+
     def __init__(
         self,
         focal_length=1.0,
@@ -956,6 +1055,12 @@ class PerspectiveCameras(CamerasBase):
                 raise ValueError("Image_size provided has invalid values")
         else:
             self.image_size = None
+
+        # When focal length is provided as one value, expand to
+        # create (N, 2) shape tensor
+        if self.focal_length.ndim == 1:  # (N,)
+            self.focal_length = self.focal_length[:, None]  # (N, 1)
+        self.focal_length = self.focal_length.expand(-1, 2)  # (N, 2)
 
     def get_projection_transform(self, **kwargs) -> Transform3d:
         """
@@ -1007,7 +1112,7 @@ class PerspectiveCameras(CamerasBase):
         xy_depth: torch.Tensor,
         world_coordinates: bool = True,
         from_ndc: bool = False,
-        **kwargs
+        **kwargs,
     ) -> torch.Tensor:
         """
         Args:
@@ -1126,6 +1231,19 @@ class OrthographicCameras(CamerasBase):
     If parameters are specified in screen space, `in_ndc` must be set to False.
     """
 
+    # For __getitem__
+    _FIELDS = (
+        "K",
+        "R",
+        "T",
+        "focal_length",
+        "principal_point",
+        "_in_ndc",
+        "image_size",
+    )
+
+    _SHARED_FIELDS = ("_in_ndc",)
+
     def __init__(
         self,
         focal_length=1.0,
@@ -1174,6 +1292,12 @@ class OrthographicCameras(CamerasBase):
                 raise ValueError("Image_size provided has invalid values")
         else:
             self.image_size = None
+
+        # When focal length is provided as one value, expand to
+        # create (N, 2) shape tensor
+        if self.focal_length.ndim == 1:  # (N,)
+            self.focal_length = self.focal_length[:, None]  # (N, 1)
+        self.focal_length = self.focal_length.expand(-1, 2)  # (N, 2)
 
     def get_projection_transform(self, **kwargs) -> Transform3d:
         """
@@ -1225,7 +1349,7 @@ class OrthographicCameras(CamerasBase):
         xy_depth: torch.Tensor,
         world_coordinates: bool = True,
         from_ndc: bool = False,
-        **kwargs
+        **kwargs,
     ) -> torch.Tensor:
         """
         Args:

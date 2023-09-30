@@ -1,4 +1,4 @@
-# Copyright (c) Facebook, Inc. and its affiliates.
+# Copyright (c) Meta Platforms, Inc. and affiliates.
 # All rights reserved.
 #
 # This source code is licensed under the BSD-style license found in the
@@ -22,8 +22,7 @@ from ..lighting import PointLights
 from ..materials import Materials
 from ..utils import TensorProperties
 from .rasterizer import Fragments
-from .shading import flat_shading, gouraud_shading, phong_shading
-
+from .shading import flat_shading, gouraud_shading, phong_shading, multi_blinnphong_shading, multi_blinnphong_baking, multi_blinnphong_baking_tensor
 
 # A Shader should take as input fragments from the output of rasterization
 # along with scene params and output images. A shader could perform operations
@@ -32,6 +31,157 @@ from .shading import flat_shading, gouraud_shading, phong_shading
 #     - sample colors from a texture map
 #     - apply per pixel lighting
 #     - blend colors across top K faces per pixel.
+
+def get_textures(meshes) -> dict:
+
+    maps = {
+        'texture' : meshes.textures.maps_padded(),
+        'diffAlbedo' : meshes.textures.diffAlbedo_padded(),
+        'specAlbedo' : meshes.textures.specAlbedo_padded(),
+        'diffNormals' : meshes.textures.diffNormals_padded(),
+        'specNormals' : meshes.textures.specNormals_padded(),
+        'shininess' : meshes.textures.shininess_padded(),
+        'vertices_uvs' : meshes.textures.vertices_uvs_padded(),
+        'shadows' : meshes.textures.shadows_padded()
+    }
+
+    return maps
+
+class MultiTexturedSoftPhongShader(nn.Module):
+    """
+    Per pixel lighting - the lighting model is applied using the interpolated
+    coordinates and normals for each pixel. The blending function returns the
+    soft aggregated color using all the faces per pixel.
+
+    To use the default values, simply initialize the shader with the desired
+    device e.g.
+
+    .. code-block::
+
+        shader = SoftPhongShader(device=torch.device("cuda:0"))
+    """
+
+    def __init__(
+        self,
+        device: Device = "cpu",
+        cameras: Optional[TensorProperties] = None,
+        lights: Optional[TensorProperties] = None,
+        materials: Optional[Materials] = None,
+        blend_params: Optional[BlendParams] = None,
+        highlight="blinn_phong",
+        normal_space="object"
+    ) -> None:
+        super().__init__()
+        self.lights = lights if lights is not None else PointLights(device=device)
+        self.materials = (
+            materials if materials is not None else Materials(device=device)
+        )
+        self.cameras = cameras
+        self.blend_params = blend_params if blend_params is not None else BlendParams()
+        self.highlight = highlight
+        self.normal_space = normal_space
+
+    # pyre-fixme[14]: `to` overrides method defined in `Module` inconsistently.
+    def to(self, device: Device):
+        # Manually move to device modules which are not subclasses of nn.Module
+        cameras = self.cameras
+        if cameras is not None:
+            self.cameras = cameras.to(device)
+        self.materials = self.materials.to(device)
+        self.lights = self.lights.to(device)
+        return self
+
+    def forward(self, fragments: Fragments, meshes: Meshes, **kwargs) -> torch.Tensor:
+        cameras = kwargs.get("cameras", self.cameras)
+        if cameras is None:
+            msg = "Cameras must be specified either at initialization \
+                or in the forward pass of SoftPhongShader"
+            raise ValueError(msg)
+
+        texels = meshes.sample_textures(fragments, multi=True)
+        lights = kwargs.get("lights", self.lights)
+        materials = kwargs.get("materials", self.materials)
+        blend_params = kwargs.get("blend_params", self.blend_params)
+        colors = multi_blinnphong_shading(
+            meshes=meshes,
+            fragments=fragments,
+            texel_group=texels,
+            lights=lights,
+            cameras=cameras,
+            materials=materials,
+            highlight=self.highlight,
+            normal_space=self.normal_space
+        )
+        znear = kwargs.get("znear", getattr(cameras, "znear", 1.0))
+        zfar = kwargs.get("zfar", getattr(cameras, "zfar", 100.0))
+        images = softmax_rgb_blend(
+            colors, fragments, blend_params, znear=znear, zfar=zfar
+        )
+        return images
+
+
+class BakerBlinnPhong(nn.Module):
+    """
+    Per pixel lighting - the lighting model is applied using the interpolated
+    coordinates and normals for each pixel. The blending function returns the
+    soft aggregated color using all the faces per pixel.
+
+    To use the default values, simply initialize the shader with the desired
+    device e.g.
+
+    .. code-block::
+
+        shader = SoftPhongShader(device=torch.device("cuda:0"))
+    """
+
+    def __init__(
+        self,
+        device: Device = "cpu",
+        cameras: Optional[TensorProperties] = None,
+        lights: Optional[TensorProperties] = None,
+        materials: Optional[Materials] = None,
+        blend_params: Optional[BlendParams] = None,
+        highlight="blinn_phong",
+    ) -> None:
+        super().__init__()
+        self.lights = lights if lights is not None else PointLights(device=device)
+        self.materials = (
+            materials if materials is not None else Materials(device=device)
+        )
+        self.cameras = cameras
+        self.blend_params = blend_params if blend_params is not None else BlendParams()
+        self.highlight = highlight
+
+    # pyre-fixme[14]: `to` overrides method defined in `Module` inconsistently.
+    def to(self, device: Device):
+        # Manually move to device modules which are not subclasses of nn.Module
+        cameras = self.cameras
+        if cameras is not None:
+            self.cameras = cameras.to(device)
+        self.materials = self.materials.to(device)
+        self.lights = self.lights.to(device)
+        return self
+
+    def forward(self, fragments: Fragments, meshes: Meshes, **kwargs) -> torch.Tensor:
+        cameras = kwargs.get("cameras", self.cameras)
+        if cameras is None:
+            msg = "Cameras must be specified either at initialization \
+                or in the forward pass of SoftPhongShader"
+            raise ValueError(msg)
+
+        texels = get_textures(meshes)
+        lights = kwargs.get("lights", self.lights)
+        materials = kwargs.get("materials", self.materials)
+        blend_params = kwargs.get("blend_params", self.blend_params)
+        colors = multi_blinnphong_baking(
+            meshes=meshes,
+            texel_group=texels,
+            lights=lights,
+            cameras=cameras,
+            materials=materials,
+            highlight=self.highlight
+        )
+        return colors
 
 
 class HardPhongShader(nn.Module):
@@ -64,6 +214,7 @@ class HardPhongShader(nn.Module):
         self.cameras = cameras
         self.blend_params = blend_params if blend_params is not None else BlendParams()
 
+    # pyre-fixme[14]: `to` overrides method defined in `Module` inconsistently.
     def to(self, device: Device):
         # Manually move to device modules which are not subclasses of nn.Module
         cameras = self.cameras
@@ -87,7 +238,6 @@ class HardPhongShader(nn.Module):
         colors = phong_shading(
             meshes=meshes,
             fragments=fragments,
-            texels=texels,
             lights=lights,
             cameras=cameras,
             materials=materials,
@@ -126,6 +276,7 @@ class SoftPhongShader(nn.Module):
         self.cameras = cameras
         self.blend_params = blend_params if blend_params is not None else BlendParams()
 
+    # pyre-fixme[14]: `to` overrides method defined in `Module` inconsistently.
     def to(self, device: Device):
         # Manually move to device modules which are not subclasses of nn.Module
         cameras = self.cameras
@@ -193,6 +344,7 @@ class HardGouraudShader(nn.Module):
         self.cameras = cameras
         self.blend_params = blend_params if blend_params is not None else BlendParams()
 
+    # pyre-fixme[14]: `to` overrides method defined in `Module` inconsistently.
     def to(self, device: Device):
         # Manually move to device modules which are not subclasses of nn.Module
         cameras = self.cameras
@@ -259,6 +411,7 @@ class SoftGouraudShader(nn.Module):
         self.cameras = cameras
         self.blend_params = blend_params if blend_params is not None else BlendParams()
 
+    # pyre-fixme[14]: `to` overrides method defined in `Module` inconsistently.
     def to(self, device: Device):
         # Manually move to device modules which are not subclasses of nn.Module
         cameras = self.cameras
@@ -297,7 +450,7 @@ def TexturedSoftPhongShader(
     lights: Optional[TensorProperties] = None,
     materials: Optional[Materials] = None,
     blend_params: Optional[BlendParams] = None,
-):
+) -> SoftPhongShader:
     """
     TexturedSoftPhongShader class has been DEPRECATED. Use SoftPhongShader instead.
     Preserving TexturedSoftPhongShader as a function for backwards compatibility.
@@ -346,6 +499,7 @@ class HardFlatShader(nn.Module):
         self.cameras = cameras
         self.blend_params = blend_params if blend_params is not None else BlendParams()
 
+    # pyre-fixme[14]: `to` overrides method defined in `Module` inconsistently.
     def to(self, device: Device):
         # Manually move to device modules which are not subclasses of nn.Module
         cameras = self.cameras

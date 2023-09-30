@@ -1,4 +1,4 @@
-# Copyright (c) Facebook, Inc. and its affiliates.
+# Copyright (c) Meta Platforms, Inc. and affiliates.
 # All rights reserved.
 #
 # This source code is licensed under the BSD-style license found in the
@@ -23,6 +23,8 @@ from .shader import (
     SoftGouraudShader,
     SoftPhongShader,
     SoftSilhouetteShader,
+    BakerBlinnPhong,
+    MultiTexturedSoftPhongShader,
 )
 from .shading import gouraud_shading, phong_shading
 from .textures import Textures  # DEPRECATED

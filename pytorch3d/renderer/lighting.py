@@ -1,4 +1,4 @@
-# Copyright (c) Facebook, Inc. and its affiliates.
+# Copyright (c) Meta Platforms, Inc. and affiliates.
 # All rights reserved.
 #
 # This source code is licensed under the BSD-style license found in the
@@ -11,6 +11,8 @@ import torch.nn.functional as F
 from ..common.types import Device
 from .utils import TensorProperties, convert_to_tensors_and_broadcast
 
+PHONG_SHININESS_BASE = 70
+BLINN_PHONG_SHININESS_BASE = PHONG_SHININESS_BASE * 2
 
 def diffuse(normals, color, direction) -> torch.Tensor:
     """
@@ -74,7 +76,8 @@ def diffuse(normals, color, direction) -> torch.Tensor:
 
 
 def specular(
-    points, normals, direction, color, camera_position, shininess
+    points, normals, direction, color, camera_position, shininess,
+    highlight='phong'
 ) -> torch.Tensor:
     """
     Calculate the specular component of light reflection.
@@ -118,6 +121,13 @@ def specular(
         msg = "Expected points and normals to have the same shape: got %r, %r"
         raise ValueError(msg % (points.shape, normals.shape))
 
+    if highlight == 'phong':
+        specular_highlight = specular_phong
+    elif highlight == 'blinn_phong':
+        specular_highlight = specular_blinn_phong
+    else:
+        raise ValueError("Expected 'phong' or 'blinn_phong' highlight argument. Got:", highlight)
+
     # Ensure all inputs have same batch dimension as points
     matched_tensors = convert_to_tensors_and_broadcast(
         points, color, direction, camera_position, shininess, device=points.device
@@ -126,6 +136,7 @@ def specular(
 
     # Reshape direction and color so they have all the arbitrary intermediate
     # dimensions as points. Assume first dim = batch dim and last dim = 3.
+
     points_dims = points.shape[1:-1]
     expand_dims = (-1,) + (1,) * len(points_dims)
     if direction.shape != normals.shape:
@@ -137,23 +148,93 @@ def specular(
     if shininess.shape != normals.shape:
         shininess = shininess.view(expand_dims)
 
+    if shininess.shape[-1] > 1:
+        shininess = shininess.mean(-1)
+
     # Renormalize the normals in case they have been interpolated.
     # We tried a version that uses F.cosine_similarity instead of renormalizing,
     # but it was slower.
     normals = F.normalize(normals, p=2, dim=-1, eps=1e-6)
     direction = F.normalize(direction, p=2, dim=-1, eps=1e-6)
+    specularity = specular_highlight(normals, direction, 
+                    camera_position, points, shininess)
+
+    return color * specularity
+
+def specular_phong(normals, direction, camera_position, points, shininess):
+    """
+    Compute the specular highlight using the phong equation:
+    (V . R)^s , R = I - 2 (N . I) * N, I = -L
+    Args:
+        points: (N, ..., 3) xyz coordinates of the points.
+        normals: (N, ..., 3) xyz normal vectors for each point.
+        direction: (N, 3) vector direction of the light.
+        camera_position: (N, 3) The xyz position of the camera.
+        shininess: (N)  The specular exponent of the material.
+    Returns:
+        specularity (N, ..., 3) specularity using phong shading  
+    """
+    # cos_angle = N . (L)
     cos_angle = torch.sum(normals * direction, dim=-1)
+
     # No specular highlights if angle is less than 0.
     mask = (cos_angle > 0).to(torch.float32)
 
     # Calculate the specular reflection.
+    # Calculate the view direction V
     view_direction = camera_position - points
     view_direction = F.normalize(view_direction, p=2, dim=-1, eps=1e-6)
+
+    # R = I - 2 (N . I) * N, I = -L
     reflect_direction = -direction + 2 * (cos_angle[..., None] * normals)
 
     # Cosine of the angle between the reflected light ray and the viewer
+    # alpha = (V . R)
     alpha = F.relu(torch.sum(view_direction * reflect_direction, dim=-1)) * mask
-    return color * torch.pow(alpha, shininess)[..., None]
+
+    # shininess s = BASE^s'
+    shininess_coef = torch.pow(PHONG_SHININESS_BASE, shininess)
+    # (V . R)^s
+    return torch.pow(alpha, shininess_coef)[..., None]
+
+def specular_blinn_phong(normals, direction, camera_position, points, shininess):
+    """
+    Compute the specular highlight using the phong equation:
+    (H . R)^s , H = (L + V) / ||L + V||
+    Args:
+        points: (N, ..., 3) xyz coordinates of the points.
+        normals: (N, ..., 3) xyz normal vectors for each point.
+        direction: (N, 3) vector direction of the light.
+        camera_position: (N, 3) The xyz position of the camera.
+        shininess: (N)  The specular exponent of the material.
+    Returns:
+        specularity (N, ..., 3) specularity using phong shading  
+    """
+    # Calculate the view direction V
+    view_direction = camera_position - points
+    view_direction = F.normalize(view_direction, p=2, dim=-1, eps=1e-6)
+
+    # Half Vector: H = (L + V) / ||L + V||
+    half_vector = direction + view_direction
+    half_vector = F.normalize(half_vector, p=2, dim=-1, eps=1e-6)
+
+    # cos_angle = N . (L)
+    cos_angle = torch.sum(normals * direction, dim=-1)
+
+    # No specular highlights if angle is less than 0.
+    mask = (cos_angle > 0).to(torch.float32)
+
+    # alpha = (H . N)
+    alpha = F.relu(torch.sum(half_vector * normals, dim=-1)) * mask
+
+    # shininess s = BASE^s'
+    shininess_coef = torch.pow(BLINN_PHONG_SHININESS_BASE, shininess)
+    # print('Shininess: ', torch.mean(shininess).data, ' Coef :', torch.mean(shininess_coef).data)
+
+    # (H . N)^s
+    blinn_phong_term = torch.pow(alpha, shininess_coef)[..., None]
+
+    return blinn_phong_term
 
 
 class DirectionalLights(TensorProperties):
@@ -197,25 +278,63 @@ class DirectionalLights(TensorProperties):
         return super().clone(other)
 
     def diffuse(self, normals, points=None) -> torch.Tensor:
-        # NOTE: Points is not used but is kept in the args so that the API is
-        # the same for directional and point lights. The call sites should not
-        # need to know the light type.
-        return diffuse(
-            normals=normals,
-            color=self.diffuse_color,
-            direction=self.direction,
-        )
+        if len(self.diffuse_color.shape) == 3:
 
-    def specular(self, normals, points, camera_position, shininess) -> torch.Tensor:
-        return specular(
-            points=points,
-            normals=normals,
-            color=self.specular_color,
-            direction=self.direction,
-            camera_position=camera_position,
-            shininess=shininess,
-        )
+            diff_comp = torch.zeros_like(normals)
 
+            for light_no in range(self.diffuse_color.shape[1]):
+                diff_comp += diffuse(normals=normals,
+                    color=self.diffuse_color[:, light_no, :],
+                    direction=self.direction[:, light_no, :]
+                )
+
+        else:
+            diff_comp = diffuse(normals=normals, color=self.diffuse_color, direction=self.direction)
+
+        return diff_comp
+
+    def specular(self, normals, points, camera_position, shininess, highlight='phong') -> torch.Tensor:
+
+        if len(self.specular_color.shape) > 2:
+
+            spec_comp = torch.zeros(normals.shape[:3])
+
+            spec_comp = specular(
+                points=points,
+                normals=normals,
+                color=self.specular_color[:, 0, :],
+                direction=self.direction[:, 0, :],
+                camera_position=camera_position,
+                shininess=shininess,
+                highlight=highlight,
+            )
+
+            for light_no in range(1, self.specular_color.shape[1]):
+                direction = self.direction[:, light_no, :] - points
+
+
+                spec_comp += specular(
+                    points=points,
+                    normals=normals,
+                    color=self.specular_color[:, light_no, :],
+                    direction=self.direction[:, light_no, :],
+                    camera_position=camera_position,
+                    shininess=shininess,
+                    highlight=highlight,
+                )
+
+        else:
+            spec_comp =  specular(
+                points=points,
+                normals=normals,
+                color=self.specular_color,
+                direction=self.direction,
+                camera_position=camera_position,
+                shininess=shininess,
+                highlight=highlight,
+            )
+
+        return spec_comp
 
 class PointLights(TensorProperties):
     def __init__(
@@ -271,20 +390,59 @@ class PointLights(TensorProperties):
 
     def diffuse(self, normals, points) -> torch.Tensor:
         location = self.reshape_location(points)
-        direction = location - points
-        return diffuse(normals=normals, color=self.diffuse_color, direction=direction)
+        
+        if len(self.diffuse_color.shape) > 2:
+            diff_comp = torch.zeros_like(normals).repeat(1, 1, 1, 3, 1)
 
-    def specular(self, normals, points, camera_position, shininess) -> torch.Tensor:
+            for light_no in range(self.diffuse_color.shape[1]):
+                direction = location[:, :, :, :, light_no, :] - points
+                diff_comp += diffuse(normals=normals,
+                    color=self.diffuse_color[:, light_no, :], direction=direction
+                )
+
+        else:
+            direction = location - points
+            diff_comp = diffuse(normals=normals, color=self.diffuse_color, direction=direction)
+
+        return diff_comp
+
+    def specular(self, normals, points, camera_position, shininess, highlight) -> torch.Tensor:
         location = self.reshape_location(points)
-        direction = location - points
-        return specular(
-            points=points,
-            normals=normals,
-            color=self.specular_color,
-            direction=direction,
-            camera_position=camera_position,
-            shininess=shininess,
-        )
+
+        if len(self.specular_color.shape) > 2:
+
+            spec_comp = torch.zeros_like(normals).repeat(1, 1, 1, 3, 1)
+
+            for light_no in range(self.specular_color.shape[1]):
+                direction = location[:, :, :, :, light_no, :] - points
+
+                s = specular(
+                    points=points,
+                    normals=normals,
+                    color=self.specular_color[:, light_no, :],
+                    direction=direction,
+                    camera_position=camera_position,
+                    shininess=shininess,
+                    highlight=highlight
+                )
+
+                spec_comp += s 
+
+        else:
+
+            direction = location - points
+
+            spec_comp = specular(
+                points=points,
+                normals=normals,
+                color=self.specular_color,
+                direction=direction,
+                camera_position=camera_position,
+                shininess=shininess,
+                highlight=highlight
+            )
+        
+        return spec_comp
 
 
 class AmbientLights(TensorProperties):
@@ -323,7 +481,7 @@ class AmbientLights(TensorProperties):
         return torch.zeros_like(points)
 
 
-def _validate_light_properties(obj):
+def _validate_light_properties(obj) -> None:
     props = ("ambient_color", "diffuse_color", "specular_color")
     for n in props:
         t = getattr(obj, n)

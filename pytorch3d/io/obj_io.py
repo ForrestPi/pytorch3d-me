@@ -1,4 +1,4 @@
-# Copyright (c) Facebook, Inc. and its affiliates.
+# Copyright (c) Meta Platforms, Inc. and affiliates.
 # All rights reserved.
 #
 # This source code is licensed under the BSD-style license found in the
@@ -18,7 +18,7 @@ from iopath.common.file_io import PathManager
 from PIL import Image
 from pytorch3d.common.types import Device
 from pytorch3d.io.mtl_io import load_mtl, make_mesh_texture_atlas
-from pytorch3d.io.utils import PathOrStr, _check_faces_indices, _make_tensor, _open_file
+from pytorch3d.io.utils import PathOrStr, _check_faces_indices, _make_tensor, _open_file, _read_image_simple
 from pytorch3d.renderer import TexturesAtlas, TexturesUV
 from pytorch3d.structures import Meshes, join_meshes_as_batch
 
@@ -28,11 +28,11 @@ from .pluggable_formats import MeshFormatInterpreter, endswith
 # Faces & Aux type returned from load_obj function.
 _Faces = namedtuple("Faces", "verts_idx normals_idx textures_idx materials_idx")
 _Aux = namedtuple(
-    "Properties", "normals verts_uvs material_colors texture_images texture_atlas"
+    "Properties", "normals verts_uvs material_colors texture_images texture_atlas reflectance"
 )
 
 
-def _format_faces_indices(faces_indices, max_index, device, pad_value=None):
+def _format_faces_indices(faces_indices, max_index: int, device, pad_value=None):
     """
     Format indices and check for invalid values. Indices can refer to
     values in one of the face properties: vertices, textures or normals.
@@ -57,6 +57,7 @@ def _format_faces_indices(faces_indices, max_index, device, pad_value=None):
     )
 
     if pad_value is not None:
+        # pyre-fixme[28]: Unexpected keyword argument `dim`.
         mask = faces_indices.eq(pad_value).all(dim=-1)
 
     # Change to 0 based indexing.
@@ -66,6 +67,7 @@ def _format_faces_indices(faces_indices, max_index, device, pad_value=None):
     faces_indices[(faces_indices < 0)] += max_index
 
     if pad_value is not None:
+        # pyre-fixme[61]: `mask` is undefined, or not always defined.
         faces_indices[mask] = pad_value
 
     return _check_faces_indices(faces_indices, max_index, pad_value)
@@ -73,12 +75,13 @@ def _format_faces_indices(faces_indices, max_index, device, pad_value=None):
 
 def load_obj(
     f,
-    load_textures=True,
+    load_textures: bool = True,
     create_texture_atlas: bool = False,
     texture_atlas_size: int = 4,
     texture_wrap: Optional[str] = "repeat",
     device: Device = "cpu",
     path_manager: Optional[PathManager] = None,
+    tex_path = None,
 ):
     """
     Load a mesh from a .obj file and optionally textures from a .mtl file.
@@ -227,6 +230,7 @@ def load_obj(
             texture_wrap=texture_wrap,
             path_manager=path_manager,
             device=device,
+            tex_path=tex_path,
         )
 
 
@@ -285,6 +289,78 @@ def load_objs_as_meshes(
         mesh = Meshes(
             verts=[verts.to(device)], faces=[faces.verts_idx.to(device)], textures=tex
         )
+        mesh_list.append(mesh)
+    if len(mesh_list) == 1:
+        return mesh_list[0]
+    return join_meshes_as_batch(mesh_list)
+
+
+def load_objs_and_textures(files: list, diffAlbedos: list = None, specAlbedos: list = None, 
+                            specNormals: list = None, diffNormals: list = None, shininess: list = None,
+                            vertices_uvs: list = None, shadows: list = None, translucency: list = None, device=None):
+    """
+    Load meshes from a list of .obj files using the load_obj function, and
+    return them as a Meshes object. This only works for meshes which have a
+    single texture image for the whole mesh. See the load_obj function for more
+    details. material_colors and normals are not stored.
+    Args:
+        f: A list of file-like objects (with methods read, readline, tell,
+        and seek), pathlib paths or strings containing file names.
+        device: Desired device of returned Meshes. Default:
+            uses the current device for the default tensor type.
+        load_textures: Boolean indicating whether material files are loaded
+    Returns:
+        New Meshes object.
+    """
+    mesh_list = []
+
+    for i, f_obj in enumerate(files):
+
+        # Pack additional textures
+        tex_path = {
+            'diffAlbedo': diffAlbedos[i] if diffAlbedos is not None else None,
+            'specAlbedo': specAlbedos[i] if specAlbedos is not None else None,
+            'diffNormals': diffNormals[i] if diffNormals is not None else None,
+            'specNormals': specNormals[i] if specNormals is not None else None,
+            'shininess' : shininess[i] if shininess is not None else None,
+            'vertices_uvs' : vertices_uvs[i] if vertices_uvs is not None else None,
+            'shadows' : shadows[i] if shadows is not None else None,
+            'translucency' : translucency[i] if translucency is not None else None
+        }
+
+        verts, faces, aux = load_obj(f_obj, load_textures=True, tex_path=tex_path)
+        verts = verts.to(device)
+        tex = None
+        tex_maps = aux.texture_images
+
+        if tex_maps is not None and len(tex_maps) > 0:
+            verts_uvs = aux.verts_uvs[None, ...].to(device)  # (1, V, 2)
+            faces_uvs = faces.textures_idx[None, ...].to(device)  # (1, F, 3)
+            image = list(tex_maps.values())[0].to(device)[None]
+            reflectance = {}
+
+            # Grab the images 
+            if diffAlbedos is not None and len(diffAlbedos) > 0:
+                reflectance['diffAlbedo'] = aux.reflectance['diffAlbedo'].to(device)[None]
+            if specAlbedos is not None and len(specAlbedos) > 0:
+                reflectance['specAlbedo'] = aux.reflectance['specAlbedo'].to(device)[None]
+            if diffNormals is not None and len(diffNormals) > 0:
+                reflectance['diffNormals'] = aux.reflectance['diffNormals'].to(device)[None]
+            if specNormals is not None and len(specNormals) > 0:
+                reflectance['specNormals'] = aux.reflectance['specNormals'].to(device)[None]
+            if shininess is not None and len(shininess) > 0:
+                reflectance['shininess'] = aux.reflectance['shininess'].to(device)[None]
+            if vertices_uvs is not None and len(vertices_uvs) > 0:
+                reflectance['vertices_uvs'] = aux.reflectance['vertices_uvs'].to(device)[None]
+            if shadows is not None and len(shadows) > 0:
+                reflectance['shadows'] = aux.reflectance['shadows'].to(device)[None]
+            if translucency is not None and len(translucency) > 0:
+                reflectance['translucency'] = aux.reflectance['translucency'].to(device)[None]
+
+            tex = TexturesUV(verts_uvs=verts_uvs, faces_uvs=faces_uvs, maps=image,
+            **reflectance)
+
+        mesh = Meshes(verts=[verts], faces=[faces.verts_idx.to(device)], textures=tex)
         mesh_list.append(mesh)
     if len(mesh_list) == 1:
         return mesh_list[0]
@@ -351,7 +427,7 @@ def _parse_face(
     faces_normals_idx,
     faces_textures_idx,
     faces_materials_idx,
-):
+) -> None:
     face = tokens[1:]
     face_list = [f.split("/") for f in face]
     face_verts = []
@@ -546,13 +622,14 @@ def _load_materials(
 def _load_obj(
     f_obj,
     *,
-    data_dir,
+    data_dir: str,
     load_textures: bool = True,
     create_texture_atlas: bool = False,
     texture_atlas_size: int = 4,
     texture_wrap: Optional[str] = "repeat",
     path_manager: PathManager,
     device: Device = "cpu",
+    tex_path = None,
 ):
     """
     Load a mesh from a file-like object. See load_obj function more details.
@@ -645,12 +722,34 @@ def _load_obj(
         textures_idx=faces_textures_idx,
         materials_idx=faces_materials_idx,
     )
+
+    # Load reflectance maps images
+    rf = {
+        'diffAlbedo' : None, 'specAlbedo' : None,
+        'diffNormals' : None, 'specNormals' : None,
+        'shininess' : None, 'vertices_uvs' : None,
+        'shadows' : None, 'translucency' : None
+    }
+    if tex_path is not None:
+        for rf_name, image in list(rf.items()):
+
+            if tex_path[rf_name] is not None:
+                rf[rf_name] = _read_image_simple(tex_path[rf_name], 'RGB') / 255.0
+                rf[rf_name] = torch.from_numpy(rf[rf_name])
+                # Only use the RGB colors
+                if rf[rf_name].shape[2] == 4:
+                    rf[rf_name] = rf[rf_name][:, :, :3]
+
+                # Reverse the image y direction
+                # rf[rf_name] = torch.flip(rf[rf_name], [0]).type_as(list(texture_images.values())[0])
+
     aux = _Aux(
         normals=normals if len(normals) else None,
         verts_uvs=verts_uvs if len(verts_uvs) else None,
         material_colors=material_colors,
         texture_images=texture_images,
         texture_atlas=texture_atlas,
+        reflectance=rf
     )
     return verts, faces, aux
 

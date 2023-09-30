@@ -1,4 +1,4 @@
-# Copyright (c) Facebook, Inc. and its affiliates.
+# Copyright (c) Meta Platforms, Inc. and affiliates.
 # All rights reserved.
 #
 # This source code is licensed under the BSD-style license found in the
@@ -131,7 +131,12 @@ def _pad_texture_maps(
         if image.shape[:2] != max_shape:
             image_BCHW = image.permute(2, 0, 1)[None]
             new_image_BCHW = interpolate(
-                image_BCHW, size=max_shape, mode="bilinear", align_corners=align_corners
+                image_BCHW,
+                # pyre-fixme[6]: Expected `Optional[int]` for 2nd param but got
+                #  `Tuple[int, int]`.
+                size=max_shape,
+                mode="bilinear",
+                align_corners=align_corners,
             )
             tex_maps[i] = new_image_BCHW[0].permute(1, 2, 0)
     tex_maps = torch.stack(tex_maps, dim=0)  # (num_tex_maps, max_H, max_W, C)
@@ -597,6 +602,14 @@ class TexturesUV(TexturesBase):
         padding_mode: str = "border",
         align_corners: bool = True,
         sampling_mode: str = "bilinear",
+        diffAlbedo: Union[torch.Tensor, List[torch.Tensor]] = None,
+        specAlbedo: Union[torch.Tensor, List[torch.Tensor]] = None,
+        diffNormals: Union[torch.Tensor, List[torch.Tensor]] = None,
+        specNormals: Union[torch.Tensor, List[torch.Tensor]] = None,
+        shininess: Union[torch.Tensor, List[torch.Tensor]] = None,
+        vertices_uvs: Union[torch.Tensor, List[torch.Tensor]] = None,
+        shadows: Union[torch.Tensor, List[torch.Tensor]] = None,
+        translucency: Union[torch.Tensor, List[torch.Tensor]] = None,
     ) -> None:
         """
         Textures are represented as a per mesh texture map and uv coordinates for each
@@ -712,7 +725,8 @@ class TexturesUV(TexturesBase):
         else:
             raise ValueError("Expected verts_uvs to be a tensor or list")
 
-        if isinstance(maps, (list, tuple)):
+        # Main Texture
+        if maps is not None:
             self._maps_list = maps
         else:
             self._maps_list = None
@@ -721,11 +735,63 @@ class TexturesUV(TexturesBase):
         if self._maps_padded.device != self.device:
             raise ValueError("maps must be on the same device as verts/faces uvs.")
 
+
+        # DiffAlbedo
+        if diffAlbedo is not None:
+            self._diffAlbedo_list = diffAlbedo
+        else:
+            self._diffAlbedo_list = None
+        self._diffAlbedo_padded = self._format_maps_padded(diffAlbedo)
+
+        # specAlbedo
+        if specAlbedo is not None:
+            self._specAlbedo_list = specAlbedo
+        else:
+            self._specAlbedo_list = None
+        self._specAlbedo_padded = self._format_maps_padded(specAlbedo)
+
+        # diffNormals
+        if diffNormals is not None:
+            self._diffNormals_list = diffNormals
+        else:
+            self._diffNormals_list = None
+        self._diffNormals_padded = self._format_maps_padded(diffNormals)
+
+        # diffNormals
+        if specNormals is not None:
+            self._specNormals_list = specNormals
+        else:
+            self._specNormals_list = None
+        self._specNormals_padded = self._format_maps_padded(specNormals)
+
+        # shininess
+        if shininess is not None:
+            self._shininess_list = shininess
+        else:
+            self._shininess_list = None
+        self._shininess_padded = self._format_maps_padded(shininess)
+
+        # translucency
+        if translucency is not None:
+            self._translucency_list = translucency
+        else:
+            self._translucency_list = None
+        self._translucency_padded = self._format_maps_padded(translucency)
+
+        # shadows
+        if shadows is not None:
+            self._tshadows_list = shadows
+        else:
+            self._shadows_list = None
+        self._shadows_padded = self._format_maps_padded(shadows)
+
         self.valid = torch.ones((self._N,), dtype=torch.bool, device=self.device)
 
     def _format_maps_padded(
         self, maps: Union[torch.Tensor, List[torch.Tensor]]
     ) -> torch.Tensor:
+        if maps is None:
+            return None
         if isinstance(maps, torch.Tensor):
             if maps.ndim != 4 or maps.shape[0] != self._N:
                 msg = "Expected maps to be of shape (N, H, W, C); got %r"
@@ -771,6 +837,36 @@ class TexturesUV(TexturesBase):
         )
         tex._num_faces_per_mesh = num_faces
         tex.valid = self.valid.clone()
+
+        if self._diffAlbedo_list is not None:
+            tex._diffAlbedo_list = [m.clone() for m in self._diffAlbedo_list]
+            tex._diffAlbedo_padded = self._diffAlbedo_padded.clone()
+
+        if self._specAlbedo_list is not None:
+            tex._specAlbedo_list = [m.clone() for m in self._specAlbedo_list]
+            tex._specAlbedo_padded = self._specAlbedo_padded.clone()
+
+        if self._specNormals_list is not None:
+            tex._specNormals_list = [m.clone() for m in self._specNormals_list]
+            tex._specNormals_padded = self._specNormals_padded.clone()
+
+        if self._diffNormals_list is not None:
+            tex._diffNormals_list = [m.clone() for m in self._diffNormals_list]
+            tex._diffNormals_padded = self._diffNormals_padded.clone()
+
+        if self._shininess_list is not None:
+            tex._shininess_list = [m.clone() for m in self._shininess_list]
+            tex._shininess_padded = self._shininess_padded.clone()
+
+        if self._translucency_list is not None:
+            tex._translucency_list = [m.clone() for m in self._translucency_list]
+            tex._translucency_padded = self._translucency_padded.clone()
+
+
+        if self._shadows_list is not None:
+            tex._shadows_list = [m.clone() for m in self._shadows_list]
+            tex._shadows_padded = self._shadows_padded.clone()
+
         return tex
 
     def detach(self) -> "TexturesUV":
@@ -784,6 +880,21 @@ class TexturesUV(TexturesBase):
         )
         if self._maps_list is not None:
             tex._maps_list = [m.detach() for m in self._maps_list]
+        if self._diffAlbedo_list is not None:
+            tex._diffAlbedo_list = [m.detach() for m in self._diffAlbedo_list]
+        if self._specAlbedo_list is not None:
+            tex._specAlbedo_list = [m.detach() for m in self._specNormals_list]
+        if self._diffNormals_list is not None:
+            tex._diffNormals_list = [m.detach() for m in self._diffNormals_list]
+        if self._specNormals_list is not None:
+            tex._specNormals_list = [m.detach() for m in self._specNormals_list]
+        if self._shininess_list is not None:
+            tex._shininess_list = [m.detach() for m in self._shininess_list]
+        if self._translucency_list is not None:
+            tex._translucency_list = [m.detach() for m in self._translucency_list]
+        if self._shadows_list is not None:
+            tex._shadows_list = [m.detach() for m in self._shadows_list]
+
         if self._verts_uvs_list is not None:
             tex._verts_uvs_list = [v.detach() for v in self._verts_uvs_list]
         if self._faces_uvs_list is not None:
@@ -881,6 +992,30 @@ class TexturesUV(TexturesBase):
     def maps_padded(self) -> torch.Tensor:
         return self._maps_padded
 
+    def diffAlbedo_padded(self) -> Union[torch.Tensor, None]:
+        return self._diffAlbedo_padded
+
+    def specAlbedo_padded(self) -> Union[torch.Tensor, None]:
+        return self._specAlbedo_padded
+
+    def diffNormals_padded(self) -> Union[torch.Tensor, None]:
+        return self._diffNormals_padded
+
+    def specNormals_padded(self) -> Union[torch.Tensor, None]:
+        return self._specNormals_padded
+
+    def shininess_padded(self) -> Union[torch.Tensor, None]:
+        return self._shininess_padded
+
+    def vertices_uvs_padded(self) -> Union[torch.Tensor, None]:
+        return self._verts_uvs_padded
+
+    def shadows_padded(self) -> Union[torch.Tensor, None]:
+        return self._shadows_padded
+
+    def translucency_padded(self) -> Union[torch.Tensor, None]:
+        return self._translucency_padded
+
     def maps_list(self) -> List[torch.Tensor]:
         if self._maps_list is not None:
             return self._maps_list
@@ -907,6 +1042,109 @@ class TexturesUV(TexturesBase):
 
         new_tex._num_faces_per_mesh = new_props["_num_faces_per_mesh"]
         return new_tex
+
+    def interpolate_multi_texture_map(self, fragments, **kwargs) -> torch.Tensor:
+        """
+        Interpolate a 2D texture map using uv vertex texture coordinates for each
+        face in the mesh. First interpolate the vertex uvs using barycentric coordinates
+        for each pixel in the rasterized output. Then interpolate the texture map
+        using the uv coordinate for each pixel.
+        Args:
+            fragments:
+                The outputs of rasterization. From this we use
+                - pix_to_face: LongTensor of shape (N, H, W, K) specifying the indices
+                of the faces (in the packed representation) which
+                overlap each pixel in the image.
+                - barycentric_coords: FloatTensor of shape (N, H, W, K, 3) specifying
+                the barycentric coordianates of each pixel
+                relative to the faces (in the packed
+                representation) which overlap the pixel.
+            meshes: Meshes representing a batch of meshes. It is expected that
+                meshes has a textures attribute which is an instance of the
+                Textures class.
+        Returns:
+            texels: tensor of shape (N, H, W, K, C) giving the interpolated
+            texture for each pixel in the rasterized image.
+        """
+        if self.isempty():
+            faces_verts_uvs = torch.zeros(
+                (self._N, 3, 2), dtype=torch.float32, device=self.device
+            )
+        else:
+            packing_list = [
+                i[j] for i, j in zip(self.verts_uvs_list(), self.faces_uvs_list())
+            ]
+            faces_verts_uvs = torch.cat(packing_list)
+
+        texture_maps = self.maps_padded()
+
+        maps = {
+            'maps' : self.maps_padded(),
+            'texture' : self.maps_padded(),
+            'diffAlbedo' : self.diffAlbedo_padded(),
+            'specAlbedo' : self.specAlbedo_padded(),
+            'diffNormals' : self.diffNormals_padded(),
+            'specNormals' : self.specNormals_padded(),
+            'shininess' : self.shininess_padded(),
+            'translucency' : self.translucency_padded()
+        }
+
+        texel_group = {}
+
+        for name in maps:
+            texture_maps = maps[name]
+
+            if texture_maps is None:
+                texel_group[name] = None
+                continue
+
+            # pixel_uvs: (N, H, W, K, 2)
+            pixel_uvs = interpolate_face_attributes(
+                fragments.pix_to_face, fragments.bary_coords, faces_verts_uvs
+            )
+
+            N, H_out, W_out, K = fragments.pix_to_face.shape
+            N, H_in, W_in, C = texture_maps.shape  # 3 for RGB
+
+            # pixel_uvs: (N, H, W, K, 2) -> (N, K, H, W, 2) -> (NK, H, W, 2)
+            pixel_uvs = pixel_uvs.permute(0, 3, 1, 2, 4).reshape(N * K, H_out, W_out, 2)
+
+            # textures.map:
+            #   (N, H, W, C) -> (N, C, H, W) -> (1, N, C, H, W)
+            #   -> expand (K, N, C, H, W) -> reshape (N*K, C, H, W)
+            texture_maps = (
+                texture_maps.permute(0, 3, 1, 2)[None, ...]
+                .expand(K, -1, -1, -1, -1)
+                .transpose(0, 1)
+                .reshape(N * K, C, H_in, W_in)
+            )
+
+            # Textures: (N*K, C, H, W), pixel_uvs: (N*K, H, W, 2)
+            # Now need to format the pixel uvs and the texture map correctly!
+            # From pytorch docs, grid_sample takes `grid` and `input`:
+            #   grid specifies the sampling pixel locations normalized by
+            #   the input spatial dimensions It should have most
+            #   values in the range of [-1, 1]. Values x = -1, y = -1
+            #   is the left-top pixel of input, and values x = 1, y = 1 is the
+            #   right-bottom pixel of input.
+
+            pixel_uvs = pixel_uvs * 2.0 - 1.0
+
+            texture_maps = torch.flip(texture_maps, [2])  # flip y axis of the texture map
+            if texture_maps.device != pixel_uvs.device:
+                texture_maps = texture_maps.to(pixel_uvs.device)
+            texels = F.grid_sample(
+                texture_maps,
+                pixel_uvs,
+                mode=self.sampling_mode,
+                align_corners=self.align_corners,
+                padding_mode=self.padding_mode,
+            )
+            # texels now has shape (NK, C, H_out, W_out)
+            texels = texels.reshape(N, K, C, H_out, W_out).permute(0, 3, 4, 1, 2)
+            texel_group[name] = texels
+
+        return texel_group
 
     def sample_textures(self, fragments, **kwargs) -> torch.Tensor:
         """
@@ -1056,24 +1294,70 @@ class TexturesUV(TexturesBase):
         )
         if not align_corners_same:
             raise ValueError("All textures must have the same align_corners value.")
+        sampling_mode_same = all(
+            tex.sampling_mode == self.sampling_mode for tex in textures
+        )
+        if not sampling_mode_same:
+            raise ValueError("All textures must have the same sampling_mode.")
 
         verts_uvs_list = []
         faces_uvs_list = []
         maps_list = []
+
+        diffAlbedo_list  = []
+        specAlbedo_list = []
+        diffNormals_list = []
+        specNormals_list = []
+        translucency_list = []
+        shadows_list = []
+        shininess_list = []
+
         faces_uvs_list += self.faces_uvs_list()
         verts_uvs_list += self.verts_uvs_list()
         maps_list += self.maps_list()
         num_faces_per_mesh = self._num_faces_per_mesh
+
+        diffAlbedo_list += self._diffAlbedo_list if self._diffAlbedo_list is not None else []
+        specAlbedo_list += self._specAlbedo_list if self._specAlbedo_list is not None else []
+        diffNormals_list += self._diffNormals_list if self._diffNormals_list is not None else []
+        specNormals_list += self._specNormals_list if self._specNormals_list is not None else []
+        translucency_list += self._translucency_list if self._translucency_list is not None else []
+        shadows_list += self._shadows_list if self._shadows_list is not None else []
+        shininess_list += self._shininess_list if self._shininess_list is not None else []
+
         for tex in textures:
             verts_uvs_list += tex.verts_uvs_list()
             faces_uvs_list += tex.faces_uvs_list()
             num_faces_per_mesh += tex._num_faces_per_mesh
             maps_list += tex.maps_list()
 
+            diffAlbedo_list += tex._diffAlbedo_list if tex._diffAlbedo_list is not None else []
+            specAlbedo_list += tex._specAlbedo_list if tex._specAlbedo_list is not None else []
+            diffNormals_list += tex._diffNormals_list if tex._diffNormals_list is not None else []
+            specNormals_list += tex._specNormals_list if tex._specNormals_list is not None else []
+            translucency_list += tex._translucency_list if tex._translucency_list is not None else []
+            shadows_list += tex._shadows_list if tex._shadows_list is not None else []
+            shininess_list += tex._shininess_list if tex._shininess_list is not None else []
+
+        diffAlbedo_list = None if diffAlbedo_list == [] else diffAlbedo_list
+        specAlbedo_list = None if specAlbedo_list == [] else specAlbedo_list
+        diffNormals_list = None if diffNormals_list == [] else diffNormals_list
+        specNormals_list = None if specNormals_list == [] else specNormals_list
+        translucency_list = None if translucency_list == [] else translucency_list
+        shadows_list = None if shadows_list == [] else shadows_list
+        shininess_list = None if shininess_list == [] else shininess_list
+
         new_tex = self.__class__(
             maps=maps_list,
             verts_uvs=verts_uvs_list,
             faces_uvs=faces_uvs_list,
+            diffAlbedo=diffAlbedo_list,
+            specAlbedo=specAlbedo_list,
+            diffNormals=diffNormals_list,
+            specNormals=specNormals_list,
+            translucency=translucency_list,
+            shadows=shadows_list,
+            shininess=shininess_list,
             padding_mode=self.padding_mode,
             align_corners=self.align_corners,
             sampling_mode=self.sampling_mode,

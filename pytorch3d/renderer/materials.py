@@ -1,4 +1,4 @@
-# Copyright (c) Facebook, Inc. and its affiliates.
+# Copyright (c) Meta Platforms, Inc. and affiliates.
 # All rights reserved.
 #
 # This source code is licensed under the BSD-style license found in the
@@ -22,7 +22,7 @@ class Materials(TensorProperties):
         ambient_color=((1, 1, 1),),
         diffuse_color=((1, 1, 1),),
         specular_color=((1, 1, 1),),
-        shininess=64,
+        shininess=64/255.,
         device: Device = "cpu",
     ) -> None:
         """

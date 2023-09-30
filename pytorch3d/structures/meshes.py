@@ -1,4 +1,4 @@
-# Copyright (c) Facebook, Inc. and its affiliates.
+# Copyright (c) Meta Platforms, Inc. and affiliates.
 # All rights reserved.
 #
 # This source code is licensed under the BSD-style license found in the
@@ -10,7 +10,6 @@ import torch
 
 from ..common.types import Device, make_device
 from . import utils as struct_utils
-
 
 class Meshes:
     """
@@ -1538,7 +1537,11 @@ class Meshes:
 
         return self.__class__(verts=new_verts_list, faces=new_faces_list, textures=tex)
 
-    def sample_textures(self, fragments):
+    def sample_textures(self, fragments, multi=False):
+
+        if multi:
+            return self.textures.interpolate_multi_texture_map(fragments)
+
         if self.textures is not None:
 
             # Check dimensions of textures match that of meshes
@@ -1555,7 +1558,143 @@ class Meshes:
             )
         else:
             raise ValueError("Meshes does not have textures")
+        
 
+
+# def join_meshes_as_batch(meshes: List[Meshes], include_textures: bool = True) -> Meshes:
+#     """
+#     Merge multiple Meshes objects, i.e. concatenate the meshes objects. They
+#     must all be on the same device. If include_textures is true, they must all
+#     be compatible, either all or none having textures, and all the Textures
+#     objects being the same type. If include_textures is False, textures are
+#     ignored.
+
+#     If the textures are TexturesAtlas then being the same type includes having
+#     the same resolution. If they are TexturesUV then it includes having the same
+#     align_corners and padding_mode.
+
+#     Args:
+#         meshes: list of meshes.
+#         include_textures: (bool) whether to try to join the textures.
+
+#     Returns:
+#         new Meshes object containing all the meshes from all the inputs.
+#     """
+#     if isinstance(meshes, Meshes):
+#         # Meshes objects can be iterated and produce single Meshes. We avoid
+#         # letting join_meshes_as_batch(mesh1, mesh2) silently do the wrong thing.
+#         raise ValueError("Wrong first argument to join_meshes_as_batch.")
+#     verts = [v for mesh in meshes for v in mesh.verts_list()]
+#     faces = [f for mesh in meshes for f in mesh.faces_list()]
+#     if len(meshes) == 0 or not include_textures:
+#         return Meshes(verts=verts, faces=faces)
+
+#     if meshes[0].textures is None:
+#         if any(mesh.textures is not None for mesh in meshes):
+#             raise ValueError("Inconsistent textures in join_meshes_as_batch.")
+#         return Meshes(verts=verts, faces=faces)
+
+#     if any(mesh.textures is None for mesh in meshes):
+#         raise ValueError("Inconsistent textures in join_meshes_as_batch.")
+
+#     # Now we know there are multiple meshes and they have textures to merge.
+#     all_textures = [mesh.textures for mesh in meshes]
+#     first = all_textures[0]
+#     tex_types_same = all(type(tex) == type(first) for tex in all_textures)
+
+#     if not tex_types_same:
+#         raise ValueError("All meshes in the batch must have the same type of texture.")
+
+#     tex = first.join_batch(all_textures[1:])
+#     return Meshes(verts=verts, faces=faces, textures=tex)
+
+
+# def join_texmeshes_as_batch(meshes: List[Meshes], include_textures: bool = True):
+#     """
+#     Merge multiple Meshes objects, i.e. concatenate the meshes objects. They
+#     must all be on the same device. If include_textures is true, they must all
+#     be compatible, either all or none having textures, and all the Textures
+#     objects having the same members. If  include_textures is False, textures are
+#     ignored.
+#     Args:
+#         meshes: list of meshes.
+#         include_textures: (bool) whether to try to join the textures.
+#     Returns:
+#         new Meshes object containing all the meshes from all the inputs.
+#     """
+#     if isinstance(meshes, Meshes):
+#         # Meshes objects can be iterated and produce single Meshes. We avoid
+#         # letting join_meshes_as_batch(mesh1, mesh2) silently do the wrong thing.
+#         raise ValueError("Wrong first argument to join_meshes_as_batch.")
+#     verts = [v for mesh in meshes for v in mesh.verts_list()]
+#     faces = [f for mesh in meshes for f in mesh.faces_list()]
+#     if len(meshes) == 0 or not include_textures:
+#         return Meshes(verts=verts, faces=faces)
+
+#     if meshes[0].textures is None:
+#         if any(mesh.textures is not None for mesh in meshes):
+#             raise ValueError("Inconsistent textures in join_meshes_as_batch.")
+#         return Meshes(verts=verts, faces=faces)
+
+#     if any(mesh.textures is None for mesh in meshes):
+#         raise ValueError("Inconsistent textures in join_meshes_as_batch.")
+
+#     # Now we know there are multiple meshes and they have textures to merge.
+#     first = meshes[0].textures
+#     kwargs = {}
+#     if first.maps_padded() is not None:
+#         if any(mesh.textures.maps_padded() is None for mesh in meshes):
+#             raise ValueError("Inconsistent maps_padded in join_meshes_as_batch.")
+#         maps = [m for mesh in meshes for m in mesh.textures.maps_padded()]
+#         kwargs["maps"] = maps
+
+#         if first.diffAlbedo_padded() is not None:
+#             kwargs["diffAlbedo"] = [m for mesh in meshes for m in mesh.textures.diffAlbedo_padded()]
+#         if first.specAlbedo_padded() is not None:
+#             kwargs["specAlbedo"] = [m for mesh in meshes for m in mesh.textures.specAlbedo_padded()]
+#         if first.diffNormals_padded() is not None:
+#             kwargs["diffNormals"] = [m for mesh in meshes for m in mesh.textures.diffNormals_padded()]
+#         if first.specNormals_padded() is not None:
+#             kwargs["specNormals"] = [m for mesh in meshes for m in mesh.textures.specNormals_padded()]
+#         if first.shininess_padded() is not None:
+#             kwargs["shininess"] = [m for mesh in meshes for m in mesh.textures.shininess_padded()]
+#         if first.vertices_uvs_padded() is not None:
+#             kwargs["vertices_uvs"] = [m for mesh in meshes for m in mesh.textures.vertices_uvs_padded()]
+#         if first.shadows_padded() is not None:
+#             kwargs["shadows"] = [m for mesh in meshes for m in mesh.textures.shadows_padded()]
+
+#     elif any(mesh.textures.maps_padded() is not None for mesh in meshes):
+#         raise ValueError("Inconsistent maps_padded in join_meshes_as_batch.")
+
+#     if first.verts_uvs_padded() is not None:
+#         if any(mesh.textures.verts_uvs_padded() is None for mesh in meshes):
+#             raise ValueError("Inconsistent verts_uvs_padded in join_meshes_as_batch.")
+#         uvs = [uv for mesh in meshes for uv in mesh.textures.verts_uvs_list()]
+#         V = max(uv.shape[0] for uv in uvs)
+#         kwargs["verts_uvs"] = struct_utils.list_to_padded(uvs, (V, 2), -1)
+#     elif any(mesh.textures.verts_uvs_padded() is not None for mesh in meshes):
+#         raise ValueError("Inconsistent verts_uvs_padded in join_meshes_as_batch.")
+
+#     if first.faces_uvs_padded() is not None:
+#         if any(mesh.textures.faces_uvs_padded() is None for mesh in meshes):
+#             raise ValueError("Inconsistent faces_uvs_padded in join_meshes_as_batch.")
+#         uvs = [uv for mesh in meshes for uv in mesh.textures.faces_uvs_list()]
+#         F = max(uv.shape[0] for uv in uvs)
+#         kwargs["faces_uvs"] = struct_utils.list_to_padded(uvs, (F, 3), -1)
+#     elif any(mesh.textures.faces_uvs_padded() is not None for mesh in meshes):
+#         raise ValueError("Inconsistent faces_uvs_padded in join_meshes_as_batch.")
+
+#     # if first.verts_rgb_padded() is not None:
+#     #     if any(mesh.textures.verts_rgb_padded() is None for mesh in meshes):
+#     #         raise ValueError("Inconsistent verts_rgb_padded in join_meshes_as_batch.")
+#     #     rgb = [i for mesh in meshes for i in mesh.textures.verts_rgb_list()]
+#     #     V = max(i.shape[0] for i in rgb)
+#     #     kwargs["verts_rgb"] = struct_utils.list_to_padded(rgb, (V, 3))
+#     # elif any(mesh.textures.verts_rgb_padded() is not None for mesh in meshes):
+#     #     raise ValueError("Inconsistent verts_rgb_padded in join_meshes_as_batch.")
+
+#     tex = TexturesUV(**kwargs)
+#     return Meshes(verts=verts, faces=faces, textures=tex)
 
 def join_meshes_as_batch(meshes: List[Meshes], include_textures: bool = True):
     """
@@ -1564,15 +1703,12 @@ def join_meshes_as_batch(meshes: List[Meshes], include_textures: bool = True):
     be compatible, either all or none having textures, and all the Textures
     objects being the same type. If include_textures is False, textures are
     ignored.
-
     If the textures are TexturesAtlas then being the same type includes having
     the same resolution. If they are TexturesUV then it includes having the same
     align_corners and padding_mode.
-
     Args:
         meshes: list of meshes.
         include_textures: (bool) whether to try to join the textures.
-
     Returns:
         new Meshes object containing all the meshes from all the inputs.
     """
@@ -1651,3 +1787,4 @@ def join_meshes_as_scene(
 
     mesh = Meshes(verts=verts.unsqueeze(0), faces=faces.unsqueeze(0), textures=textures)
     return mesh
+

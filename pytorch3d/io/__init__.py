@@ -1,11 +1,11 @@
-# Copyright (c) Facebook, Inc. and its affiliates.
+# Copyright (c) Meta Platforms, Inc. and affiliates.
 # All rights reserved.
 #
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of this source tree.
 
 
-from .obj_io import load_obj, load_objs_as_meshes, save_obj
+from .obj_io import load_obj, load_objs_as_meshes, save_obj, load_objs_and_textures
 from .pluggable import IO
 from .ply_io import load_ply, save_ply
 
