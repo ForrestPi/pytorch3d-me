@@ -9,9 +9,17 @@ which introduces additional functionality in texturing and shading. In detail we
 - Subsurface-scattering approximation with spatially-varying translucency,
 - Multiple Point and Directional lights per rendered batch item.
 
+<br></br>
+Below we show the skin shading comparison between 
+a) `Pytorch3d` `TexturedSoftPhongShader` with the albedo texture and shape normals,
+b) our `Pytorch3d-Me` Blinn-Phong shader, with separate textures for diffuse and specular albedo and normals
+c) previous with additional subsurface scattering approximation and
+d) previous with additional occlusion shadow. Additional discussion is in included in the [AvatarMe++](https://arxiv.org/abs/2112.05957) paper and the qualitative comparison is shown below:
+
+![AvatarMe Rendering Comparisons](media/rendering-comparisons.png)
 
 # Installation
-To install `pytorch3d-Me` you need to build this repo from source
+To install `Pytorch3d-Me` you need to build this repo from source
 following the standard installation instructions at [INSTALL.md](./INSTALL.md).
 In short, first install the prerequisites:
 ```
@@ -27,7 +35,7 @@ pip install scikit-image matplotlib imageio plotly opencv-python
 ```
 And then build and install the project:
 ```
-cd pytorch3d-Me
+cd pytorch3d-me
 pip install -e .
 ```
 
