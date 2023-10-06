@@ -8,6 +8,30 @@ which introduces additional functionality in texturing and shading. In detail we
 - Spatially-varying specular shininess,
 - Subsurface-scattering approximation with spatially-varying translucency,
 - Multiple Point and Directional lights per rendered batch item.
+
+
+# Installation
+To install `pytorch3d-Me` you need to build this repo from source
+following the standard installation instructions at [INSTALL.md](./INSTALL.md).
+In short, first install the prerequisites:
+```
+conda create -n pytorch3d python=3.9
+conda activate pytorch3d
+conda install -c pytorch pytorch=1.9.1 torchvision cudatoolkit=10.2
+conda install -c fvcore -c iopath -c conda-forge fvcore iopath
+conda install -c bottler nvidiacub
+
+# Demos and examples
+conda install jupyter
+pip install scikit-image matplotlib imageio plotly opencv-python
+```
+And then build and install the project:
+```
+cd pytorch3d-Me
+pip install -e .
+```
+
+# Citations
  
 If you find this extension useful in your research consider citing the works below:
 ```bibtex
