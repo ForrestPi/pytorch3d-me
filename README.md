@@ -58,7 +58,7 @@ meshes = load_objs_and_textures(mesh_dir,
 
 where each `_dir` path shows to a list of image files of the same dimensions.
 
-To use our BlinnPhong shader with spatially varying reflectance,
+To use our Blinn-Phong shader with spatially varying reflectance,
 pass the `MultiTexturedSoftPhongShader` shader in the `MeshRenderer` constructor,
 with the optional `highlight='blinn_phong'` argument for Blinn Phong shading,
 and `normal_space='tangent'` for tangent-space specular normals, instead of object space:
@@ -116,13 +116,14 @@ as well as the main Pytorch3D project:
 }
 ```
 
-
-Below is the official README
+For completion, we copy below the official README of PyTorch3D:
 
 ---
+<br></br>
+<br></br>
+<br></br>
 
-
-# Introduction
+## Introduction
 
 PyTorch3D provides efficient, reusable components for 3D Computer Vision research with [PyTorch](https://pytorch.org).
 
