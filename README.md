@@ -18,7 +18,9 @@ d) previous with additional occlusion shadow. Additional discussion is in includ
 
 ![AvatarMe Rendering Comparisons](media/rendering-comparisons.png)
 
-# Installation
+Rendering with all added features is about 15% slower than the standard pytorch3D `SoftPhongShader`.
+
+## Installation
 To install `Pytorch3d-Me` you need to build this repo from source
 following the standard installation instructions at [INSTALL.md](./INSTALL.md).
 In short, first install the prerequisites:
@@ -39,7 +41,46 @@ cd pytorch3d-me
 pip install -e .
 ```
 
-# Citations
+## Getting Started
+You can use `pytorch3d-me` in the same manner as `pytorch3d`, 
+along with our expanded `Textures` and `Shaders` classes and `io` functions.
+
+To load a set of reflectance textures you can use
+```python
+from pytorch3d.io import load_objs_and_textures
+
+meshes = load_objs_and_textures(mesh_dir,
+                    diffAlbedos=da_dir, specAlbedos=sa_dir,
+                    diffNormals=dn_dir, specNormals=sn_dir,
+                    shininess=sh_dir, translucency=tr_dir,
+                    device=device)
+```
+
+where each `_dir` path shows to a list of image files of the same dimensions.
+
+To use our BlinnPhong shader with spatially varying reflectance,
+pass the `MultiTexturedSoftPhongShader` shader in the `MeshRenderer` constructor,
+with the optional `highlight='blinn_phong'` argument for Blinn Phong shading,
+and `normal_space='tangent'` for tangent-space specular normals, instead of object space:
+
+```python
+from pytorch3d.renderer import MeshRenderer, MultiTexturedSoftPhongShader
+
+renderer = MeshRenderer(
+    rasterizer=MeshRasterizer(
+        cameras=cameras, raster_settings=raster_settings
+    ),
+    shader=MultiTexturedSoftPhongShader(
+        device=device, cameras=cameras, lights=lights,
+        highlight='blinn_phong', normal_space='tangent'
+    )
+)
+```
+
+A detailed example is included at [`demo/demo.ipynb`](./demo/demo.ipynb). 
+For any further questions please raise an Issue or contact us. 
+
+## Citations
  
 If you find this extension useful in your research consider citing the works below:
 ```bibtex
